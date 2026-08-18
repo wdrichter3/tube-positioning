@@ -1,0 +1,7 @@
+string map_id
+string planner_type
+uint32[] included_tube_ids
+---
+bool success
+string plan_id
+uint32 number_of_steps

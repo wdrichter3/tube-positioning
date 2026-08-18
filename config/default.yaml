@@ -1,0 +1,27 @@
+application:
+  name: "Vision-Guided Tube Positioning"
+  version: "0.1.0"
+  motion_authority: false
+
+perception:
+  detector: "hybrid"
+  min_diameter_px: 15
+  max_diameter_px: 120
+  min_circularity: 0.65
+
+geometry:
+  pattern: "auto"
+  pitch_tolerance_percent: 10.0
+  ransac:
+    enabled: true
+    residual_threshold_mm: 2.5
+
+calibration:
+  default_method: "reference_object"
+  minimum_confidence: 0.85
+
+planner:
+  default_strategy: "serpentine_rows"
+
+review:
+  inference_confidence_threshold: 0.85

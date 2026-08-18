@@ -1,0 +1,9 @@
+std_msgs/Header header
+string calibration_id
+string scale_method
+float64 mm_per_pixel_x
+float64 mm_per_pixel_y
+bool perspective_corrected
+bool metric_valid
+float32 confidence
+string reference_description

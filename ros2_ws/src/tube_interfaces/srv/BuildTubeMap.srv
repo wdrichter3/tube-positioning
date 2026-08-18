@@ -1,0 +1,7 @@
+bool use_existing_candidates
+---
+bool success
+string map_id
+uint32 tube_count
+uint32 review_count
+string message

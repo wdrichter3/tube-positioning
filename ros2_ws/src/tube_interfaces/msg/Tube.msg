@@ -1,0 +1,14 @@
+uint32 tube_id
+int32 row
+int32 column
+float64 x_mm
+float64 y_mm
+float64 z_mm
+float32 diameter_mm
+uint32[] neighbor_ids
+float32 detection_confidence
+float32 geometry_confidence
+float32 position_confidence
+uint8 state
+bool inferred
+bool operator_verified

@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint32 current_tube_id
+uint32 target_tube_id
+float64 current_x_mm
+float64 current_y_mm
+float64 target_x_mm
+float64 target_y_mm
+float64 delta_x_mm
+float64 delta_y_mm
+float32 confidence

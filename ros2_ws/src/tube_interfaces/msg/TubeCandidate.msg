@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint32 candidate_id
+float32 pixel_x
+float32 pixel_y
+float32 major_axis_px
+float32 minor_axis_px
+float32 orientation_deg
+float32 estimated_diameter_mm
+float32 visual_confidence
+string detector_name

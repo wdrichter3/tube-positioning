@@ -1,0 +1,12 @@
+std_msgs/Header header
+string map_id
+string job_id
+string pattern
+float32 nominal_pitch_x_mm
+float32 nominal_pitch_y_mm
+float32 nominal_tube_diameter_mm
+float32 overall_confidence
+tube_interfaces/Tube[] tubes
+uint32 detected_count
+uint32 inferred_count
+uint32 review_count
