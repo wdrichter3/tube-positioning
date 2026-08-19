@@ -1,0 +1,18 @@
+perception:
+  detector: hybrid
+  min_diameter_px: 12
+  max_diameter_px: 100
+  contour:
+    min_circularity: 0.38
+    min_axis_ratio: 0.45
+    adaptive_block_size: 41
+    adaptive_c: 7
+  hough:
+    dp: 1.2
+    param1: 100
+    param2: 24
+  hybrid:
+    merge_distance_factor: 0.55
+debug:
+  save_overlay: true
+  draw_rejected: false

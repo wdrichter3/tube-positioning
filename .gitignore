@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ROS / colcon generated files
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Development/test imagery and generated outputs
+datasets/
+
+# Editors / OS
+.vscode/
+.idea/
+desktop.ini
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+*~
