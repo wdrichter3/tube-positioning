@@ -39,7 +39,7 @@ S = {s["id"]: s for s in m["sites"]}
 ids = [s["id"] for s in m["sites"] if s["state"] == "OPEN"]
 a = [{"id": i, "machine_x_mm": -S[i]["sheet_y_mm"] + 500, "machine_y_mm": S[i]["sheet_x_mm"] + 100}
      for i in (ids[0], ids[len(ids) // 2], ids[-1])]
-m2 = req(f"/api/captures/{cid}/anchors", "PUT", {"anchors": a, "allow_scale": True})
+m2 = req(f"/api/captures/{cid}/anchors", "PUT", {"anchors": a, "map_revision": m["map_revision"], "allow_scale": True})
 print("anchors", {k: m2["transform"][k] for k in ("rms_mm", "rotation_deg", "scale_error_pct", "anchors_used", "mirrored")})
 print("machine xy of anchor0", [(s["machine_x_mm"], s["machine_y_mm"]) for s in m2["sites"] if s["id"] == ids[0]], a[0])
 csv = req(f"/api/captures/{cid}/map.csv", raw=True).decode().splitlines()
@@ -47,7 +47,7 @@ print(csv[0]); print(csv[1])
 p = req(f"/api/captures/{cid}/propose", "POST", {"geometry": g})
 print("propose", p["source"], len(p["items"]))
 print("labels", req(f"/api/captures/{cid}/labels", "PUT", {"items": p["items"], "reviewed": True}))
-cal = req(f"/api/captures/{cid}/calibrate_depth", "POST")
+cal = req(f"/api/captures/{cid}/calibrate_depth", "POST", {"map_revision": m2["map_revision"]})
 print("cal", cal.get("factor") if "factor" in cal else cal)
 print("stats", req("/api/dataset/stats"))
 print("snapshot bytes", len(req("/api/devices/sim-1/snapshot.jpg", raw=True)))

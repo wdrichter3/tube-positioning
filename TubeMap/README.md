@@ -6,6 +6,16 @@ It replaces the ROS 2 TubeWorkspace stack with a single Python service. That ser
 
 ## What's new in 1.3
 
+Local calibration reliability candidate: rebuilding a map clears its machine anchors,
+even when the geometry is unchanged. Re-select anchors on the new map. Rebuilt companion
+maps also lose calibration and show a notice. Label proposals do not save or rebuild
+stored maps. Anchor writes and depth calibration must include the current `map_revision`;
+every successful write advances it, and stale or legacy requests return 409. Keep the
+revision from each response. Invalid anchor lists, IDs and nonfinite coordinates return
+400 without changing the map. Legacy maps must be rebuilt before calibration editing.
+The dashboard prevents overlapping writes and clears stale selections and coordinates.
+This does not establish physical positioning accuracy or authorize motion.
+
 **Faster label review.** You no longer click tubes that are already right.
 
 - After **Propose**, press **N** to jump to the next doubtful mark: any proposal that isn't a plain tube, or that is below the confidence slider. Then press **1-4** to relabel it, **Enter** to keep it, or **Del** to remove it. Each key moves on to the next doubtful mark.
@@ -135,6 +145,12 @@ Every device also has **Depth scale correction** and **Depth scale uncertainty**
 - **Passage** (open all the way through) is never confirmed by this camera.
 
 ## Tested here, and not yet tested
+
+Local reliability candidate verification (2026-10-05): 55 Python tests passed and
+four companion-camera tests failed; those same four failures reproduce on the
+untouched 1.3.0 archive. Eleven JavaScript regression tests passed. The development
+claims below are historical release notes, not a claim that this candidate's entire
+suite passes. Real hardware and positioning accuracy remain unverified.
 
 These were checked in development:
 

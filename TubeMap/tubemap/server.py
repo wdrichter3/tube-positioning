@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import mimetypes
 import re
 import shutil
@@ -10,6 +11,7 @@ import socket
 import threading
 import time
 import traceback
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -55,11 +57,29 @@ def geometry_from_request(g: dict) -> dict:
     return out
 
 
+def require_map_revision(m, body):
+    if not isinstance(body, dict):
+        raise HttpError(400, "request must be an object")
+    if not m or not m.get("map_revision") or body.get("map_revision") != m["map_revision"]:
+        raise HttpError(409, "Map changed or has no revision. Rebuild or reload the map and reselect anchor tubes.")
+
+
+def reset_map_calibration(m, notice):
+    m["map_revision"] = uuid.uuid4().hex
+    m["anchors"] = []
+    m["transform"] = None
+    m["anchor_allow_scale"] = False
+    m["calibration_notice"] = notice
+    mapping.apply_anchor_transform(m["sites"], None)
+    m["ready"] = not any(c["status"] == "FAIL" for c in m["checks"])
+
+
 class App:
     def __init__(self):
         self.devices = DeviceManager()
         self.jobs = learning.Jobs()
         self.map_lock = threading.Lock()
+        self.map_update_lock = threading.RLock()
 
     # ---- helpers -------------------------------------------------------------
     def capture_from(self, dev_id, set_id=None):
@@ -136,6 +156,8 @@ class App:
         m["job"] = meta.get("job")
         m["capture_set"] = meta.get("capture_set")
         m["depth_scale_factor"] = meta.get("depth_scale_factor", 1.0)
+        # IDs can be reused after a rebuild, even when they identify different tubes.
+        m["map_revision"] = uuid.uuid4().hex
         return m, meta
 
     def companions(self, meta):
@@ -152,6 +174,10 @@ class App:
         return out
 
     def build_map(self, cid, geometry_req, roi, use_companion=True):
+        with self.map_update_lock:
+            return self._build_map(cid, geometry_req, roi, use_companion)
+
+    def _build_map(self, cid, geometry_req, roi, use_companion=True):
         m, meta = self._map_one(cid, geometry_req, roi)
         if use_companion:
             for cmeta in self.companions(meta)[:1]:
@@ -160,20 +186,16 @@ class App:
                 c_roi = old_c.get("roi") or dataset.load_labels(cmeta["id"]).get("roi")
                 try:
                     cm, _ = self._map_one(cmeta["id"], geometry_req, c_roi)
+                    reset_map_calibration(cm, "Companion map rebuilt. Re-establish machine anchors on this map.")
                     dataset.save_map(cmeta["id"], cm)
                     depthcheck.merge_companion(m, cm, name)
                     m["companion"]["roi_used"] = bool(c_roi)
+                    m["companion"]["map_revision"] = cm["map_revision"]
                 except Exception as exc:
                     m["checks"].append({"id": "companion_match", "label": f"Companion ({name})", "status": "WARN",
                                         "detail": f"Could not map the {name} image: {exc}"})
                     m["companion"] = {"capture_id": cmeta["id"], "device": name, "error": str(exc)}
-        m["ready"] = not any(c["status"] == "FAIL" for c in m["checks"])
-        old = dataset.load_map(cid)
-        if old and old.get("anchors"):
-            m["anchors"] = old["anchors"]
-            m["transform"] = mapping.fit_anchor_transform(m["sites"], m["anchors"], old.get("anchor_allow_scale", False))
-            m["anchor_allow_scale"] = old.get("anchor_allow_scale", False)
-            mapping.apply_anchor_transform(m["sites"], m["transform"])
+        reset_map_calibration(m, "Map rebuilt. Re-establish machine anchors; any rebuilt companion map also needs new anchors.")
         dataset.save_map(cid, m)
         return m
 
@@ -410,9 +432,14 @@ def r_cap_del(app, h, q, cid):
 def r_propose(app, h, q, cid):
     b = h.json_body()
     roi = b.get("roi")
-    g = b.get("geometry") or config.load_settings()["geometry"]
     try:
-        m = app.build_map(cid, g, roi)
+        # Proposals are read-only, including when a label ROI differs from the map.
+        with app.map_update_lock:
+            old = dataset.load_map(cid) or {}
+            g = b.get("geometry") or old.get("geometry_request") or config.load_settings()["geometry"]
+            roi = b.get("roi", old.get("roi"))
+            m, _ = app._map_one(cid, g, roi)
+            m["ready"] = not any(c["status"] == "FAIL" for c in m["checks"])
         return {"items": mapping.site_labels_from_map(m), "source": "map", "map_ready": m["ready"]}
     except Exception as exc:
         from .vision import detect
@@ -452,20 +479,51 @@ def r_map_csv(app, h, q, cid):
 @route("PUT", r"/api/captures/(?P<cid>[\w.-]+)/anchors")
 def r_anchors(app, h, q, cid):
     b = h.json_body()
+    with app.map_update_lock:
+        return _save_anchors(b, cid)
+
+
+def _save_anchors(b, cid):
     m = dataset.load_map(cid)
     if m is None:
         raise HttpError(404, "build a map first")
+    require_map_revision(m, b)
+    if any(c.get("id") == "depth_calibration_pending" for c in m.get("checks", [])):
+        raise HttpError(409, "Depth calibration is incomplete. Rebuild before setting anchors.")
+    if not isinstance(b.get("anchors"), list) or not isinstance(b.get("allow_scale", False), bool):
+        raise HttpError(400, "anchors must be a list and allow_scale must be a boolean")
+    sites = {s["id"]: s for s in m["sites"]}
+    seen, positions = set(), set()
     anchors = []
-    for a in b.get("anchors", []):
+    for a in b["anchors"]:
         try:
-            anchors.append({"id": str(a["id"]), "machine_x_mm": float(a["machine_x_mm"]),
-                            "machine_y_mm": float(a["machine_y_mm"])})
-        except (KeyError, TypeError, ValueError):
-            raise HttpError(400, "each anchor needs a tube id and machine X/Y in mm")
+            if not isinstance(a, dict) or not isinstance(a.get("id"), str):
+                raise ValueError()
+            sid = a["id"]
+            if sid not in sites or sid in seen:
+                raise ValueError()
+            xy = (float(sites[sid]["sheet_x_mm"]), float(sites[sid]["sheet_y_mm"]))
+            x, y = a["machine_x_mm"], a["machine_y_mm"]
+            if isinstance(x, bool) or isinstance(y, bool):
+                raise ValueError()
+            x, y = float(x), float(y)
+            if not all(math.isfinite(v) for v in (*xy, x, y)) or xy in positions:
+                raise ValueError()
+            seen.add(sid); positions.add(xy)
+            anchors.append({"id": sid, "machine_x_mm": x, "machine_y_mm": y})
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise HttpError(400, "anchors need unique known tube IDs and finite machine X/Y and sheet coordinates")
     m["anchors"] = anchors
     m["anchor_allow_scale"] = bool(b.get("allow_scale", False))
-    m["transform"] = mapping.fit_anchor_transform(m["sites"], anchors, m["anchor_allow_scale"]) if anchors else None
-    mapping.apply_anchor_transform(m["sites"], m["transform"])
+    try:
+        m["transform"] = mapping.fit_anchor_transform(m["sites"], anchors, m["anchor_allow_scale"]) if anchors else None
+        mapping.apply_anchor_transform(m["sites"], m["transform"])
+        json.dumps(m, allow_nan=False)
+    except (ValueError, ArithmeticError, np.linalg.LinAlgError):
+        raise HttpError(400, "anchor transform is not finite; check machine coordinates")
+    # Compare-and-swap token covers ALL writes, not just geometry rebuilds.
+    m["map_revision"] = uuid.uuid4().hex
+    m.pop("calibration_notice", None)
     dataset.save_map(cid, m)
     return m
 
@@ -473,7 +531,17 @@ def r_anchors(app, h, q, cid):
 @route("POST", r"/api/captures/(?P<cid>[\w.-]+)/calibrate_depth")
 def r_cal_depth(app, h, q, cid):
     b = h.json_body()
+    with app.map_update_lock:
+        return _calibrate_depth(app, b, cid)
+
+
+def _calibrate_depth(app, b, cid):
     main = dataset.load_map(cid)
+    require_map_revision(main, b)
+    if b.get("target", "main") not in ("main", "companion"):
+        raise HttpError(400, "target must be main or companion")
+    if any(c.get("id") == "depth_calibration_pending" for c in main.get("checks", [])):
+        raise HttpError(409, "Depth calibration is incomplete. Rebuild before calibrating again.")
     if not main or main.get("mode") != "known":
         raise HttpError(409, "Build a known-geometry map first (on a sheet whose pitch you measured).")
     target = cid
@@ -482,13 +550,30 @@ def r_cal_depth(app, h, q, cid):
         if not target:
             raise HttpError(409, "This map has no companion depth camera.")
     m = dataset.load_map(target)
+    if target != cid and (not m or not m.get("map_revision") or
+                          main["companion"].get("map_revision") != m["map_revision"]):
+        raise HttpError(409, "Companion map changed. Rebuild the main map before depth calibration.")
     if not m or not m.get("depth_pitch"):
         raise HttpError(409, "That camera's map has no depth-based pitch to calibrate from.")
     meta = dataset.load_meta(target)
-    old = float(meta.get("depth_scale_factor", 1.0) or 1.0)
-    factor = old * main["geometry"]["pitch_mm"] / m["depth_pitch"]["pitch_mm"]
+    try:
+        old = float(meta.get("depth_scale_factor", 1.0))
+        mapped_scale = float(m["depth_scale_factor"])
+        pitch, measured = float(main["geometry"]["pitch_mm"]), float(m["depth_pitch"]["pitch_mm"])
+        if not all(math.isfinite(v) and v > 0 for v in (old, mapped_scale, pitch, measured)) or old != mapped_scale:
+            raise ValueError()
+        factor = mapped_scale * pitch / measured
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise HttpError(409, "Depth scale provenance changed or is missing. Rebuild the map before calibrating.")
     if not 0.7 < factor < 1.3:
         raise HttpError(409, f"Correction {factor:.3f} is implausible; check the entered pitch.")
+    # Invalidate first: a later metadata/device/rebuild failure must never leave
+    # apparently current machine calibration attached to changed depth evidence.
+    for affected_id, affected in {cid: main, target: m}.items():
+        affected["checks"].append({"id": "depth_calibration_pending", "label": "Depth calibration",
+                                   "status": "FAIL", "detail": "Depth calibration changed; rebuild required."})
+        reset_map_calibration(affected, "Depth calibration changed. Rebuild and re-establish machine anchors.")
+        dataset.save_map(affected_id, affected)
     dataset.set_depth_scale(target, factor)
     dev = (meta.get("device") or {}).get("id")
     updated_device = False

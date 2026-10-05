@@ -1,0 +1,14 @@
+# Local runtime and field evidence are not source code.
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.log
+Log/
+data/
+captures/
+datasets/
+tests/fixtures/
+.env
+.env.*

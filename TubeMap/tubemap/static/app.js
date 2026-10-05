@@ -27,7 +27,11 @@ async function api(path, opts = {}) {
   const r = await fetch(path, o);
   const ct = r.headers.get("Content-Type") || "";
   const data = ct.includes("json") ? await r.json() : await r.text();
-  if (!r.ok) throw new Error((data && data.error) || `${r.status} ${r.statusText}`);
+  if (!r.ok) {
+    const error = new Error((data && data.error) || `${r.status} ${r.statusText}`);
+    error.status = r.status;
+    throw error;
+  }
   return data;
 }
 function toast(msg, bad = false, ms = 3500) {
@@ -83,9 +87,10 @@ class Viewer {
     this.dpr = dpr; this.c.width = Math.max(1, r.width * dpr); this.c.height = Math.max(1, r.height * dpr);
     if (this.img && !this._fitted) this.fit(); else this.draw();
   }
-  async load(url, w, h) {
+  async load(url, w, h, isCurrent = () => true) {
     const img = new Image(); img.decoding = "async";
     await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("image failed to load")); img.src = url; });
+    if (!isCurrent()) return;
     this.img = img; this.iw = w || img.naturalWidth; this.ih = h || img.naturalHeight; this._fitted = false; this.fit();
   }
   clear() { this.img = null; this.draw(); }
@@ -141,7 +146,7 @@ class RoiTool {
 const S = {
   tab: "live", devices: [], drivers: [], settings: null, standards: null,
   liveDev: null, captures: [],
-  map: { cid: null, data: null, roi: null, sel: null, mode: "known" },
+  map: { cid: null, data: null, roi: null, sel: null, mode: "known", generation: 0, loading: false, writing: false },
   lab: { cid: null, meta: null, items: [], roi: null, cls: "TUBE", undo: [], filter: "all", dirty: false, focus: -1 },
   dev: { editing: null },
 };
@@ -333,26 +338,52 @@ async function mapEnter() {
 }
 $("#map-capture").onchange = e => mapLoadCapture(e.target.value);
 async function mapLoadCapture(cid) {
-  S.map.cid = cid; S.map.sel = null; $("#map-err").textContent = "";
-  const d = await api(`/api/captures/${cid}`);
-  await mapV.load(`/api/captures/${cid}/preview.jpg`, d.meta.image.width, d.meta.image.height);
-  S.map.data = d.map;
-  if (d.map) { S.map.roi = d.map.roi; if (d.map.geometry_request) setGeometryForm(d.map.geometry_request); }
-  else { S.map.roi = d.labels && d.labels.roi || null; if (S.settings) setGeometryForm(S.settings.geometry); }
-  renderMapResult(); mapV.draw();
+  const generation = ++S.map.generation;
+  S.map.cid = cid; S.map.sel = null; S.map.data = null; S.map.roi = null;
+  S.map.loading = true; S.map.writing = false;
+  $("#map-build").textContent = "Build map";
+  mapRoi.cancel(); mapV.clear(); renderMapResult(); mapControls(); $("#map-err").textContent = "";
+  try {
+    const d = await api(`/api/captures/${cid}`);
+    if (!mapIsCurrent(cid, generation)) return;
+    await mapV.load(`/api/captures/${cid}/preview.jpg`, d.meta.image.width, d.meta.image.height, () => mapIsCurrent(cid, generation));
+    if (!mapIsCurrent(cid, generation)) return;
+    adoptMap(d.map);
+    if (d.map) { S.map.roi = d.map.roi; if (d.map.geometry_request) setGeometryForm(d.map.geometry_request); }
+    else { S.map.roi = d.labels && d.labels.roi || null; if (S.settings) setGeometryForm(S.settings.geometry); }
+    renderMapResult(); mapV.draw();
+  } catch (e) { if (mapIsCurrent(cid, generation)) { mapV.clear(); $("#map-err").textContent = e.message; } }
+  finally { if (mapIsCurrent(cid, generation)) { S.map.loading = false; mapControls(); } }
 }
-$("#map-build").onclick = async () => {
+function mapIsCurrent(cid, generation) { return S.map.cid === cid && S.map.generation === generation; }
+function adoptMap(m, keepSelection = false) {
+  if (m && m.capture_id !== S.map.cid) throw new Error("Capture changed. Reload the selected capture.");
+  S.map.data = m || null;
+  if (!keepSelection) S.map.sel = null;
+}
+function mapControls() {
+  const busy = S.map.loading || S.map.writing;
+  ["#map-build", "#map-roi", "#map-roi-clear", "#anc-add", "#anc-scale", "#map-cal", "#map-cal-comp"].forEach(id => { const el = $(id); if (el) el.disabled = !!busy; });
+  $$("#anc-list button").forEach(el => el.disabled = !!busy);
+}
+async function buildMap() {
   if (!S.map.cid) return toast("Capture an image first.", true);
+  if (S.map.loading || S.map.writing) return;
+  const cid = S.map.cid, generation = ++S.map.generation, g = geometryForm(), roi = S.map.roi;
+  S.map.writing = true; adoptMap(null); renderMapResult(); mapV.draw(); mapControls();
   const b = $("#map-build"); b.disabled = true; b.textContent = "Building…"; $("#map-err").textContent = "";
   try {
-    const g = geometryForm();
-    S.map.data = await api(`/api/captures/${S.map.cid}/map`, { method: "POST", json: { geometry: g, roi: S.map.roi } });
+    const m = await api(`/api/captures/${cid}/map`, { method: "POST", json: { geometry: g, roi } });
+    if (!mapIsCurrent(cid, generation)) return;
+    adoptMap(m);
     if (S.settings) { S.settings.geometry = g; api("/api/settings", { method: "PUT", json: { geometry: g } }).catch(() => { }); }
     renderMapResult(); mapV.draw();
-  } catch (e) { $("#map-err").textContent = e.message; }
-  finally { b.disabled = false; b.textContent = "Build map"; }
-};
+  } catch (e) { if (mapIsCurrent(cid, generation)) $("#map-err").textContent = e.message; }
+  finally { if (mapIsCurrent(cid, generation)) { S.map.writing = false; b.textContent = "Build map"; mapControls(); } }
+}
+$("#map-build").onclick = buildMap;
 function renderMapResult() {
+  if (S.map.data && S.map.data.capture_id !== S.map.cid) { S.map.data = null; S.map.sel = null; }
   const m = S.map.data; const box = $("#map-result");
   $("#map-anchor-box").hidden = !m;
   if (!m) { box.innerHTML = `<p class="muted">Build a map to see results.</p>`; return; }
@@ -364,6 +395,7 @@ function renderMapResult() {
   if (g.nearest_tubes && g.nearest_tubes.length) snap += `<b>Tube candidates</b><span>${g.nearest_tubes.slice(0, 2).map(t => `${t.od_in}" ${t.bwg} BWG`).join(", ")}</span>`;
   box.innerHTML = `
     <div class="banner ${m.ready ? "ok" : "bad"}">${m.ready ? "Map ready" : "Not ready: " + esc(fails.map(c => c.label).join(", "))}</div>
+    ${m.calibration_notice ? `<p class="hint">${esc(m.calibration_notice)}</p>` : ""}
     <div class="checks">${m.checks.map(c => `<div class="check"><span class="chip ${c.status}">${c.status}</span><b>${esc(c.label)}</b><span class="d">${esc(c.detail)}</span></div>`).join("")}</div>
     <div class="kv">
       <b>Pattern</b><span>${esc((g.pattern || "").toLowerCase())}</span>
@@ -386,16 +418,26 @@ function renderMapResult() {
   const calc = $("#map-cal-comp");
   if (calc) calc.onclick = async () => {
     if (!confirmInline(calc, "Only on a sheet whose pitch you measured with a rule. Click again to apply.")) return;
-    try { const r = await api(`/api/captures/${m.capture_id}/calibrate_depth`, { method: "POST", json: { target: "companion" } }); S.map.data = r.map; renderMapResult(); mapV.draw(); toast(`${m.companion.device} depth scale ${fmt(r.previous, 4)} → ${fmt(r.factor, 4)}`); }
-    catch (e) { toast(e.message, true, 6000); }
+    await calibrateDepth(m, "companion");
   };
   const cal = $("#map-cal");
   if (cal) cal.onclick = async () => {
     if (!confirmInline(cal, "Only on a sheet whose pitch you measured with a rule. Click again to apply.")) return;
-    try { const r = await api(`/api/captures/${m.capture_id}/calibrate_depth`, { method: "POST" }); S.map.data = r.map; renderMapResult(); mapV.draw(); toast(`Depth scale ${fmt(r.previous, 4)} → ${fmt(r.factor, 4)}${r.device_updated ? " (saved to device)" : ""}`); }
-    catch (e) { toast(e.message, true, 6000); }
+    await calibrateDepth(m, "main");
   };
-  renderSel(); renderAnchors();
+  renderSel(); renderAnchors(); mapControls();
+}
+async function calibrateDepth(m, target) {
+  if (S.map.loading || S.map.writing || S.map.data !== m || m.capture_id !== S.map.cid) return;
+  const cid = S.map.cid, generation = ++S.map.generation;
+  S.map.writing = true; adoptMap(null); renderMapResult(); mapV.draw(); mapControls();
+  try {
+    const r = await api(`/api/captures/${cid}/calibrate_depth`, {method: "POST", json: {target, map_revision: m.map_revision}});
+    if (!mapIsCurrent(cid, generation)) return;
+    adoptMap(r.map); renderMapResult(); mapV.draw();
+    toast(`Depth scale ${fmt(r.previous, 4)} → ${fmt(r.factor, 4)}${r.device_updated ? " (saved to device)" : ""}`);
+  } catch (e) { if (mapIsCurrent(cid, generation)) { $("#map-err").textContent = e.message; toast(e.message, true, 6000); } }
+  finally { if (mapIsCurrent(cid, generation)) { S.map.writing = false; mapControls(); } }
 }
 function companionHtml(m) {
   const c = m.companion; const ds = m.depth_summary;
@@ -433,10 +475,25 @@ function renderAnchors() {
   $$("#anc-list button").forEach(b => b.onclick = () => { const a = [...m.anchors]; a.splice(+b.dataset.i, 1); saveAnchors(a); });
 }
 async function saveAnchors(anchors) {
-  try { S.map.data = await api(`/api/captures/${S.map.cid}/anchors`, { method: "PUT", json: { anchors, allow_scale: $("#anc-scale").checked } }); renderMapResult(); mapV.draw(); }
-  catch (e) { toast(e.message, true); }
+  const cid = S.map.cid, current = S.map.data, generation = S.map.generation;
+  if (!current || current.capture_id !== cid || S.map.loading || S.map.writing) return;
+  S.map.writing = true; mapControls();
+  try {
+    const updated = await api(`/api/captures/${cid}/anchors`, { method: "PUT", json: { anchors, map_revision: current.map_revision, allow_scale: $("#anc-scale").checked } });
+    if (!mapIsCurrent(cid, generation) || S.map.data !== current) return;
+    adoptMap(updated, true); renderMapResult(); mapV.draw();
+  } catch (e) {
+    if (!mapIsCurrent(cid, generation) || S.map.data !== current) return;
+    if (e.status === 409) {
+      S.map.data = null; S.map.sel = null;
+      renderMapResult(); mapV.draw();
+      $("#map-err").textContent = e.message;
+    }
+    toast(e.message, true);
+  } finally { if (mapIsCurrent(cid, generation)) { S.map.writing = false; mapControls(); } }
 }
 $("#anc-add").onclick = () => {
+  if (S.map.loading || S.map.writing) return;
   const m = S.map.data; if (!m || !S.map.sel) return toast("Select a tube first.", true);
   const x = parseFloat($("#anc-x").value), y = parseFloat($("#anc-y").value);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return toast("Enter machine X and Y in mm.", true);

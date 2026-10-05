@@ -76,6 +76,15 @@ def test_capture_map_label_flow(server):
     g = {"mode": "known", "pattern": "TRIANGULAR", "pitch_value": 1.0, "pitch_unit": "in", "id_value": 0.62, "id_unit": "in"}
     code, m = call(server, f"/api/captures/{cap['id']}/map", "POST", {"geometry": g})
     assert code == 200 and m["ready"]
+    path = f"/api/captures/{cap['id']}/anchors"
+    code, anchored = call(server, path, "PUT", {"anchors": [], "map_revision": m["map_revision"]})
+    assert code == 200 and anchored["map_revision"] != m["map_revision"]
+    code, rebuilt = call(server, f"/api/captures/{cap['id']}/map", "POST", {"geometry": g})
+    assert code == 200 and rebuilt["map_revision"] != m["map_revision"]
+    code, rejected = call(server, path, "PUT", {"anchors": [], "map_revision": m["map_revision"]})
+    assert code == 409
+    code, rejected = call(server, path, "PUT", {"anchors": []})
+    assert code == 409
     code, p = call(server, f"/api/captures/{cap['id']}/propose", "POST", {"geometry": g})
     assert code == 200 and p["source"] == "map"
     code, r = call(server, f"/api/captures/{cap['id']}/labels", "PUT", {"items": p["items"], "reviewed": True})
@@ -138,6 +147,6 @@ def test_companion_depth_camera_flow(server_pair):
     code, bad = call(base, f"/api/captures/{cap['id']}/map", "POST", {"geometry": {**g, "pitch_value": 1.0625}})
     assert not bad["ready"] and {c["id"]: c for c in bad["checks"]}["pitch_companion"]["status"] == "FAIL"
     # calibrating the companion's depth scale writes to that device (from the correct map)
-    call(base, f"/api/captures/{cap['id']}/map", "POST", {"geometry": g})
-    code, cal = call(base, f"/api/captures/{cap['id']}/calibrate_depth", "POST", {"target": "companion"})
+    _, fresh = call(base, f"/api/captures/{cap['id']}/map", "POST", {"geometry": g})
+    code, cal = call(base, f"/api/captures/{cap['id']}/calibrate_depth", "POST", {"target": "companion", "map_revision": fresh["map_revision"]})
     assert code == 200 and cal["device_updated"] and abs(cal["factor"] - 1) < 0.02
