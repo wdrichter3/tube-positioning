@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TubeMap</title>
+<link rel="stylesheet" href="/app.css">
+<script>
+/* apply the saved appearance before the page paints (copy of the server setting) */
+try { const L = JSON.parse(localStorage.getItem("tubemap.look") || "null"); if (L) { const r = document.documentElement;
+  if (L.theme && L.theme !== "auto") r.dataset.theme = L.theme; for (const [k, v] of Object.entries(L.vars || {})) r.style.setProperty(k, v); } } catch (e) {}
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><b>TubeMap</b> <span id="ver" class="muted"></span></div>
+  <nav id="tabs">
+    <button data-tab="live" class="on">Live</button>
+    <button data-tab="map">Map</button>
+    <button data-tab="label">Label</button>
+    <button data-tab="devices">Devices</button>
+    <button data-tab="model">Model</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+  <div id="topstatus" class="topstatus"></div>
+</header>
+
+<main>
+<!-- ============================== LIVE ============================== -->
+<section id="tab-live" class="tab on">
+  <div class="cols3">
+    <aside class="panel">
+      <h3>Cameras</h3>
+      <div id="live-devs" class="list"></div>
+      <div class="btnrow">
+        <button id="btn-capture" class="primary">Capture</button>
+        <button id="btn-capture-all">Capture all</button>
+      </div>
+      <p class="hint">Capture saves the full-resolution colour image, aligned depth and the camera calibration.</p>
+      <h3>Quick settings</h3>
+      <div id="live-controls" class="form"></div>
+    </aside>
+    <div class="stage">
+      <div id="live-view" class="liveview"><div class="empty">No camera running. Add or enable one on the Devices tab.</div></div>
+      <div id="live-meta" class="metaline"></div>
+    </div>
+    <aside class="panel">
+      <h3>Recent captures</h3>
+      <div id="recent" class="thumbs"></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================== MAP ============================== -->
+<section id="tab-map" class="tab">
+  <div class="cols3">
+    <aside class="panel">
+      <h3>Capture</h3>
+      <select id="map-capture"></select>
+      <h3>Geometry</h3>
+      <div class="seg" id="map-mode">
+        <button data-v="known" class="on">Known pitch &amp; ID</button>
+        <button data-v="discover">Discover</button>
+      </div>
+      <div class="form" id="geom-form">
+        <label>Pattern
+          <select id="g-pattern"><option value="TRIANGULAR">Triangular (30°/60°)</option><option value="SQUARE">Square (90°/45°)</option><option value="AUTO" class="disc-only">Auto-detect</option></select>
+        </label>
+        <div class="known-only">
+          <label>Pitch <span class="pair"><input id="g-pitch" type="number" step="0.0001" list="std-pitch"><select id="g-pitch-unit"><option>in</option><option>mm</option></select></span></label>
+          <datalist id="std-pitch"></datalist>
+          <label>Tube size helper <select id="g-tube"><option value="">Pick OD + BWG to fill ID…</option></select></label>
+          <label>Tube ID <span class="pair"><input id="g-id" type="number" step="0.001"><select id="g-id-unit"><option>in</option><option>mm</option></select></span></label>
+        </div>
+      </div>
+      <h3>Region</h3>
+      <div class="btnrow"><button id="map-roi">Draw ROI</button><button id="map-roi-clear">Clear</button></div>
+      <p class="hint" id="map-roi-hint">Optional. Click corners around the tube field, double-click to finish.</p>
+      <button id="map-build" class="primary wide">Build map</button>
+      <div id="map-err" class="err"></div>
+    </aside>
+    <div class="stage">
+      <div class="toolbar">
+        <label><input type="checkbox" id="map-show-ids"> Tube IDs</label>
+        <label><input type="checkbox" id="map-show-empty" checked> Empty cells</label>
+        <label><input type="checkbox" id="map-show-rej"> Rejected detections</label>
+        <label><input type="checkbox" id="map-show-depth"> Depth evidence</label>
+        <span class="legend"><i class="s-OPEN"></i>Open <i class="s-PLUGGED"></i>Plugged <i class="s-REVIEW"></i>Review <i class="s-NO_TUBE"></i>No tube <i class="s-anchor"></i>Anchor</span>
+        <span class="legend" id="depth-legend" hidden><b class="dl-face"></b>Depth: surface <b class="dl-recess"></b>open/deep <b class="dl-conf"></b>disagrees</span>
+        <button id="map-fit" class="small">Fit</button>
+      </div>
+      <div class="viewer"><canvas id="map-canvas"></canvas></div>
+      <div class="metaline muted">Wheel to zoom · drag to pan · click a tube to select it</div>
+    </div>
+    <aside class="panel">
+      <div id="map-result"><p class="muted">Build a map to see results.</p></div>
+      <div id="map-anchor-box" hidden>
+        <h3>Machine anchors</h3>
+        <p class="hint">Jog the positioner to a tube, then enter its machine X/Y. Three or more widely spaced tubes give a checked transform.</p>
+        <div id="sel-site" class="kv"></div>
+        <div class="pair"><input id="anc-x" type="number" step="0.01" placeholder="Machine X mm"><input id="anc-y" type="number" step="0.01" placeholder="Machine Y mm"></div>
+        <div class="btnrow"><button id="anc-add">Add anchor for selected tube</button></div>
+        <label class="chk"><input type="checkbox" id="anc-scale"> Fit scale too (reports axis scale error)</label>
+        <div id="anc-list"></div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================== LABEL ============================== -->
+<section id="tab-label" class="tab">
+  <div class="cols3">
+    <aside class="panel">
+      <div class="seg" id="lab-filter"><button data-v="all" class="on">All</button><button data-v="0">To review</button><button data-v="1">Reviewed</button></div>
+      <div id="lab-list" class="caplist"></div>
+      <div class="btnrow">
+        <label class="btn">Import images<input id="imp-img" type="file" accept="image/*" multiple hidden></label>
+        <label class="btn">Import ZIP<input id="imp-zip" type="file" accept=".zip" hidden></label>
+      </div>
+      <a class="btn wide" href="/api/export/dataset.zip">Export reviewed dataset</a>
+    </aside>
+    <div class="stage">
+      <div class="toolbar">
+        <span class="classes" id="lab-classes">
+          <button data-c="TUBE" class="on"><i class="c-TUBE"></i>1 Tube</button>
+          <button data-c="BLOCKED"><i class="c-BLOCKED"></i>2 Blocked</button>
+          <button data-c="UNKNOWN"><i class="c-UNKNOWN"></i>3 Unknown</button>
+          <button data-c="NOT_TUBE"><i class="c-NOT_TUBE"></i>4 Not a tube</button>
+        </span>
+        <button id="lab-propose">Propose</button>
+        <button id="lab-roi">ROI</button>
+        <button id="lab-undo" title="Ctrl+Z">Undo</button>
+        <button id="lab-fit" class="small">Fit</button>
+      </div>
+      <div class="toolbar quick">
+        <button id="lab-walk" title="Jump to the least certain proposal (N). Then 1-4 relabel, Enter keep, Del remove.">Check doubtful · N</button>
+        <button id="lab-accept" title="Accept every dashed (unchecked) mark as proposed (A)">Accept the rest · A</button>
+        <label title="Proposals below this confidence, and every proposal that is not a plain tube, count as doubtful">Doubtful below <input id="lab-doubt" type="range" min="0.5" max="0.99" step="0.01" style="width:90px"> <span id="lab-doubt-v"></span></label>
+        <label class="chk"><input type="checkbox" id="lab-dim"> Dim confident</label>
+      </div>
+      <div class="viewer"><canvas id="lab-canvas"></canvas></div>
+      <div class="metaline muted">Correct marks need no clicking. N walks the doubtful ones · A accepts the rest · Shift+drag box = accept · Ctrl+drag box = set class · click = set class · Shift+click add · right-click delete · Ctrl+Enter save &amp; next</div>
+    </div>
+    <aside class="panel">
+      <h3 id="lab-title">No capture selected</h3>
+      <label>Name (e.g. exchanger ID) <input id="lab-name" placeholder="e.g. NB5890"></label>
+      <div id="lab-counts" class="kv"></div>
+      <div id="lab-progress" class="progressline"></div>
+      <label>New mark radius (px) <input id="lab-radius" type="number" step="0.5" min="1"></label>
+      <label>Notes <textarea id="lab-notes" rows="3"></textarea></label>
+      <div class="btnrow">
+        <button id="lab-save">Save</button>
+        <button id="lab-review" class="primary">Save &amp; mark reviewed</button>
+      </div>
+      <label class="chk" title="Test-set captures are never trained on; they score each new profile fairly."><input type="checkbox" id="lab-test"> Test set (never used for training)</label>
+      <button id="lab-review-next" class="wide primary" title="Ctrl+Enter">Save, reviewed &amp; next ›</button>
+      <button id="lab-next" class="wide">Skip to next unreviewed ›</button>
+      <div id="lab-msg" class="hint"></div>
+      <hr>
+      <div class="btnrow"><a id="lab-zip" class="btn small">Download capture</a><button id="lab-del" class="small danger">Delete capture</button></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================== DEVICES ============================== -->
+<section id="tab-devices" class="tab">
+  <div class="cols2">
+    <div>
+      <div class="row-between"><h2>Devices</h2><button id="dev-add" class="primary">Add device</button></div>
+      <div id="dev-list" class="cards"></div>
+    </div>
+    <aside class="panel" id="dev-editor" hidden>
+      <h3 id="dev-ed-title">Add device</h3>
+      <div class="form">
+        <label>Type <select id="dev-driver"></select></label>
+        <p id="dev-driver-desc" class="hint"></p>
+        <label>Name <input id="dev-name"></label>
+        <label>Role <select id="dev-role"><option value="overview">Overview camera</option><option value="tool">Tool-head camera</option><option value="depth">Depth checks (companion)</option><option value="aux">Auxiliary</option></select></label>
+        <div id="dev-fields"></div>
+        <label class="chk"><input type="checkbox" id="dev-adv"> Show advanced settings</label>
+        <label class="chk"><input type="checkbox" id="dev-enabled" checked> Enabled</label>
+      </div>
+      <div class="btnrow">
+        <button id="dev-discover">Discover</button>
+        <button id="dev-test">Test</button>
+        <button id="dev-save" class="primary">Save</button>
+        <button id="dev-cancel">Cancel</button>
+      </div>
+      <div id="dev-found" class="list"></div>
+      <div id="dev-test-out"></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============================== MODEL ============================== -->
+<section id="tab-model" class="tab">
+  <div class="cols2">
+    <div>
+      <h2>Detection model</h2>
+      <div id="model-stats" class="stats"></div>
+      <div class="panel">
+        <h3>Train a new profile</h3>
+        <p class="hint">Tunes the opening detector and trains the plug / not-a-tube classifier from reviewed captures. Whole captures are held out for scoring. The new profile is saved but not used until you activate it.</p>
+        <div class="btnrow"><input id="train-name" placeholder="Profile name (optional)"><button id="train-go" class="primary">Train</button></div>
+        <div id="train-prog"></div>
+        <div id="train-result"></div>
+      </div>
+    </div>
+    <div>
+      <h2>Profiles</h2>
+      <div id="profiles" class="cards"></div>
+      <div class="panel">
+        <h3>Train a neural detector elsewhere</h3>
+        <p class="hint">The export includes YOLO-format labels and a <code>data.yaml</code>, so a PC with a GPU can train a neural detector (for example with Ultralytics YOLO). Running such a model inside TubeMap is not built yet; the reviewed labels here are the training and scoring set for it.</p>
+        <a class="btn" href="/api/export/dataset.zip">Export dataset ZIP</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== SETTINGS ============================== -->
+<section id="tab-settings" class="tab">
+  <div class="cols2">
+    <div class="panel">
+      <h3>Job details (stored with each capture)</h3>
+      <div class="form">
+        <label>Customer <input id="s-customer"></label>
+        <label>Site / unit <input id="s-site"></label>
+        <label>Exchanger ID <input id="s-exchanger"></label>
+        <label>Notes <input id="s-jobnotes"></label>
+      </div>
+      <h3>Cross-check tolerances</h3>
+      <div class="form">
+        <label>Tube ID vs image (±fraction) <input id="t-id_ratio_tol" type="number" step="0.01"></label>
+        <label>Apparent / true ID factor <input id="t-apparent_id_factor" type="number" step="0.01"></label>
+        <label>Pitch vs depth (±%) <input id="t-pitch_depth_tol_pct" type="number" step="0.1"></label>
+        <label>Lattice residual warn (fraction of pitch) <input id="t-residual_rel_warn" type="number" step="0.01"></label>
+        <label>Lattice residual fail <input id="t-residual_rel_fail" type="number" step="0.01"></label>
+        <label>Mark REVIEW below confidence <input id="t-review_below" type="number" step="0.05"></label>
+        <label>Depth: surface within ± (mm) of the face <input id="t-depth_face_tol_mm" type="number" step="0.5"></label>
+        <label>Depth: open if at least (mm) behind the face <input id="t-depth_recess_mm" type="number" step="1"></label>
+        <label>Depth: minimum pixels inside an opening <input id="t-depth_min_px" type="number" step="1"></label>
+        <label class="chk"><input type="checkbox" id="t-depth_to_state"> Mark tubes REVIEW when depth disagrees with the image</label>
+      </div>
+      <h3>Live view</h3>
+      <div class="form">
+        <label>Preview width (px) <input id="s-live_max_width" type="number" step="16"></label>
+        <label>Preview rate (fps) <input id="s-live_fps" type="number" step="1"></label>
+      </div>
+      <button id="s-save" class="primary">Save settings</button> <span id="s-msg" class="hint"></span>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px">
+    <div class="panel" id="look-panel">
+      <h3>Appearance</h3>
+      <p class="hint">Changes show immediately. Save keeps them on this computer.</p>
+      <div class="look-row"><span>Theme</span>
+        <div class="theme-cards" id="look-theme">
+          <button data-v="auto"><i style="background:linear-gradient(90deg,#eef1f4 50%,#0e1318 50%)"></i>Auto</button>
+          <button data-v="light"><i style="background:#eef1f4"></i>Light</button>
+          <button data-v="dark"><i style="background:#0e1318"></i>Dark</button>
+          <button data-v="field"><i style="background:#fff;border:2px solid #000"></i>Field</button>
+        </div></div>
+      <p class="hint" style="margin-top:0">Auto follows Windows. Field is high-contrast for sunlight.</p>
+      <div class="look-row"><span>Accent colour</span>
+        <div class="swatches" id="look-accent">
+          <button class="sw" data-v="" title="Theme default" style="background:conic-gradient(#0b62c4 0 50%,#4b9dff 0)"></button>
+          <button class="sw" data-v="#0b62c4" style="background:#0b62c4" title="Blue"></button>
+          <button class="sw" data-v="#0a7f78" style="background:#0a7f78" title="Teal"></button>
+          <button class="sw" data-v="#2f7d32" style="background:#2f7d32" title="Green"></button>
+          <button class="sw" data-v="#d9480f" style="background:#d9480f" title="Orange"></button>
+          <button class="sw" data-v="#c92a2a" style="background:#c92a2a" title="Red"></button>
+          <button class="sw" data-v="#6741d9" style="background:#6741d9" title="Purple"></button>
+          <button class="sw" data-v="#495057" style="background:#495057" title="Graphite"></button>
+          <input type="color" id="look-accent-custom" title="Custom colour">
+        </div></div>
+      <div class="look-row"><span>Text size <b id="look-text-val"></b></span><input type="range" id="look-text" min="0.8" max="1.6" step="0.05"></div>
+      <div class="look-row"><span>Spacing</span>
+        <div class="seg" id="look-density" style="margin:0"><button data-v="compact">Compact</button><button data-v="normal">Normal</button><button data-v="roomy">Roomy</button></div></div>
+      <div class="look-row"><span>Map line width <b id="look-line-val"></b></span><input type="range" id="look-line" min="0.5" max="3" step="0.25"></div>
+      <h3>Map colours</h3>
+      <div class="colorgrid" id="look-map-colors"></div>
+      <h3>Label colours</h3>
+      <div class="colorgrid" id="look-label-colors"></div>
+      <div class="btnrow" style="margin-top:12px"><button id="look-save" class="primary">Save appearance</button><button id="look-reset">Reset to defaults</button><span id="look-msg" class="hint"></span></div>
+    </div>
+    <div class="panel">
+      <h3>System</h3>
+      <div id="sys" class="kv"></div>
+    </div>
+    </div>
+  </div>
+</section>
+</main>
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

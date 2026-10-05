@@ -1,0 +1,4 @@
+obsensor_metadata_win10.ps1 is copied unchanged from Orbbec's pyorbbecsdk repository
+(https://github.com/orbbec/pyorbbecsdk, main branch, scripts/), licensed under the
+Apache License 2.0. It adds Windows registry keys so Orbbec cameras report device
+timestamps over UVC. It is optional for TubeMap.

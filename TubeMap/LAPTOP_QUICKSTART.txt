@@ -1,0 +1,63 @@
+TubeMap 1.2 - testing the OAK-D Pro and Astra+ on a Windows laptop
+=====================================================================
+
+1. SET UP (first time, needs internet, about 5 minutes)
+   - Right-click the ZIP > Extract All... to a normal folder, for example Documents\TubeMap.
+     Don't run it from inside the ZIP window.
+   - Plug the OAK-D Pro and the Astra+ into two different USB 3 (blue or "SS") ports.
+     If the OAK keeps disconnecting, use its power supply / Y-cable: laptop ports can't always
+     power the IR projector.
+   - Close any other program using the cameras (Orbbec Viewer, DepthAI Viewer, the old workspace).
+   - Double-click START_TUBEMAP_LAPTOP.bat.
+       * If Python 3.10-3.12 isn't installed, it offers to install Python 3.12 for your user
+         account. The Astra+ SDK doesn't support Python 3.13 or newer.
+       * It installs NumPy, OpenCV, DepthAI (OAK) and the Orbbec SDK v1 (Astra+) into a private
+         .venv folder. Nothing else on the laptop is changed.
+       * It imports your old Image Lab labels from %USERPROFILE%\TubePositioningImageLabData once.
+       * It prints a camera check, then opens http://localhost:8088 in your browser.
+   - Keep the black window open while you work. Closing it stops TubeMap.
+
+2. CHECK THE CAMERAS  (Devices tab)
+   - "OAK-D Pro" (role: Overview camera) and "Astra+" (role: Depth checks) should both show
+     "running".
+   - If the Astra+ isn't listed: Add device > Orbbec (USB) > Discover > Test >
+     Role "Depth checks (companion)" > Save.
+   - Edit > Show advanced settings shows resolution, alignment and exposure options.
+
+3. BENCH TEST
+   a. Mount both cameras side by side, pointing the same way at the tubesheet. The Astra+
+      should be 0.6-0.8 m from the face: closer gives more depth pixels per tube. Put a few
+      real plugs in the sheet.
+   b. Live tab: pick the OAK-D Pro and press Capture. The Astra+ is captured at the same moment.
+   c. Map tab: enter pattern, pitch and tube ID, optionally draw an ROI, then Build map. Look at:
+        - "Pitch vs depth (Astra+)"   - is the entered pitch consistent with the Astra+ depth?
+        - "Matched to Astra+"         - did the two cameras' tube patterns line up?
+        - "Depth at openings"         - how many depth pixels land inside each opening
+      Tick "Depth evidence": red squares mean the Astra+ sees a surface at the face (plug),
+      blue dots mean open or deep. Magenta rings mark tubes where depth and image disagree.
+   d. Label tab: Propose, correct, "Save & mark reviewed". Every reviewed capture improves the
+      detector (Model tab > Train).
+      Tick "Test set" on 2-3 typical reviewed captures. They are never trained on, so each new
+      profile is scored fairly against the current one.
+      After training, the Model tab lists captures that look like they have unlabelled tubes.
+      Fix those first.
+   e. Settings > Appearance: theme (Field = high contrast for sunlight), accent colour, text size,
+      spacing and map colours. Changes preview live, and "Save appearance" keeps them.
+
+   UPDATING FROM 1.1: extract 1.2 over the old folder, or into a new one, and run
+   START_TUBEMAP_LAPTOP.bat. It adds scikit-learn (one-time download). Captures, labels and
+   profiles in %USERPROFILE%\.tubemap are kept.
+
+4. IF SOMETHING GOES WRONG
+   - Double-click CHECK_CAMERAS.bat. It lists Python, packages and every camera it can find,
+     and saves the result to %USERPROFILE%\.tubemap\doctor.txt. Send that file.
+   - For a bad map: Label tab > Download capture, and send the ZIP.
+   - Astra+ "not found": try another USB 3 port, unplug/replug, close Orbbec Viewer.
+   - Optional: ENABLE_ASTRA_TIMESTAMPS.bat (asks for administrator rights) lets the Astra+
+     report its own frame timestamps on Windows. TubeMap works without it.
+   - Start over cleanly: delete the .venv folder next to the .bat files and run it again.
+     Your captures and labels are kept in %USERPROFILE%\.tubemap.
+
+Data folder: %USERPROFILE%\.tubemap (captures, labels, models, device settings).
+The same data can be copied to the Pi's ~/.tubemap later, or moved with Export/Import on the
+Label tab.

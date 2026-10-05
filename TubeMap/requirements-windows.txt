@@ -1,0 +1,7 @@
+# Pinned for Windows laptops (Python 3.10-3.12). NumPy stays on 1.x because the Astra+ SDK v1
+# wrapper was built against the NumPy 1 interface.
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+depthai==2.33.0.0
+scikit-learn==1.5.2     # tube-state classifier (gradient-boosted trees)
+# Astra+ (Orbbec SDK v1) is installed separately with --no-deps:  pyorbbecsdk-community==1.4.2
